@@ -16,7 +16,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import type { Db } from '../db/database.js';
+import type { StorageBackend } from '../db/storage.js';
 import { OwnerCredentialRepo, SessionRepo, LoginThrottleRepo } from '../db/repos.js';
 import { hashSecret, verifySecret } from '../crypto.js';
 import { passwordMatches } from '../middleware.js';
@@ -39,7 +39,7 @@ function digestEq(a: string, b: string): boolean {
 }
 
 export interface OwnerAuthServiceDeps {
-  db: Db;
+  db: StorageBackend;
   ownerRepo: OwnerCredentialRepo;
   sessions: SessionRepo;
   loginThrottleRepo: LoginThrottleRepo;
@@ -48,7 +48,7 @@ export interface OwnerAuthServiceDeps {
 }
 
 export class OwnerAuthService {
-  private readonly db: Db;
+  private readonly db: StorageBackend;
   private readonly ownerRepo: OwnerCredentialRepo;
   private readonly sessions: SessionRepo;
   private readonly loginThrottleRepo: LoginThrottleRepo;
@@ -57,22 +57,39 @@ export class OwnerAuthService {
    *  failed password checks. Generated lazily on first use. */
   private dummyHash: Promise<string> | null = null;
 
-  readonly initialMode: OwnerAuthMode;
+  initialMode: OwnerAuthMode;
   mode: OwnerAuthMode;
   username: string | null;
 
-  constructor(deps: OwnerAuthServiceDeps) {
+  private constructor(deps: OwnerAuthServiceDeps) {
     this.db = deps.db;
     this.ownerRepo = deps.ownerRepo;
     this.sessions = deps.sessions;
     this.loginThrottleRepo = deps.loginThrottleRepo;
     this.envPassword = deps.envPassword;
+    this.mode = 'loopback_only';
+    this.username = null;
+    this.initialMode = 'loopback_only';
+  }
 
-    const stored = deps.ownerRepo.get();
+  /**
+   * Resolves the active auth mode from the provisioned owner row (or the
+   * environment fallback). Constructors cannot read the database
+   * synchronously anymore — always construct via this factory.
+   */
+  static async create(deps: OwnerAuthServiceDeps): Promise<OwnerAuthService> {
+    const svc = new OwnerAuthService(deps);
+    await svc.reloadCredential();
+    return svc;
+  }
+
+  /** Re-resolves the active auth mode (after provisioning/rotation). */
+  private async reloadCredential(): Promise<void> {
+    const stored = await this.ownerRepo.get();
     if (stored) {
       this.mode = 'database';
       this.username = stored.username;
-    } else if (deps.envPassword) {
+    } else if (this.envPassword) {
       this.mode = 'environment';
       this.username = null;
     } else {
@@ -99,7 +116,7 @@ export class OwnerAuthService {
     }
     if (this.mode !== 'database') return false;
 
-    const row = this.ownerRepo.get();
+    const row = await this.ownerRepo.get();
     if (!row) return false;
 
     const uname = (username ?? '').normalize('NFKC').trim().toLowerCase();
@@ -146,12 +163,17 @@ export class OwnerAuthService {
       throw new Error(`Owner password must be ${PASSWORD_MIN_LEN}–${PASSWORD_MAX_LEN} characters (${PASSWORD_HINT}).`);
     }
     const hash = await hashSecret(password);
-    const prior = this.ownerRepo.exists();
-    return this.db.transaction(() => {
-      if (prior) this.ownerRepo.update(username, hash);
-      else this.ownerRepo.insert(username, hash);
-      const revokedSessions = this.sessions.deleteAll();
-      this.loginThrottleRepo.clearAll();
+    const prior = await this.ownerRepo.exists();
+    // Tx-scoped repo instances make every statement join the same transaction:
+    // owner row write + full session revoke commit or roll back together.
+    return this.db.transaction(async (tx) => {
+      const ownerRepo = new OwnerCredentialRepo(tx);
+      const sessions = new SessionRepo(tx);
+      const loginThrottleRepo = new LoginThrottleRepo(tx);
+      if (prior) await ownerRepo.update(username, hash);
+      else await ownerRepo.insert(username, hash);
+      const revokedSessions = await sessions.deleteAll();
+      await loginThrottleRepo.clearAll();
       this.mode = 'database';
       this.username = username;
       return { username, revokedSessions, created: !prior };

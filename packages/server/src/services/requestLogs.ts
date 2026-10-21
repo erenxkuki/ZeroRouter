@@ -1,4 +1,8 @@
-import type { Db } from '../db/database.js';
+/**
+ * Gateway request-log persistence (request_logs). Reads/writes go through the
+ * storage Executor; dialect translation happens in the backend adapters.
+ */
+import type { Executor } from '../db/storage.js';
 import { logger } from '../logger.js';
 
 const log = logger('logs');
@@ -25,17 +29,15 @@ export interface RequestLogInput {
 export interface RequestLogRecord extends RequestLogInput {}
 
 export class RequestLogs {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Executor) {}
 
-  add(input: RequestLogInput): void {
+  async add(input: RequestLogInput): Promise<void> {
     try {
-      this.db
-        .prepare(
-          `INSERT INTO request_logs (id, ts, source, client_key_id, provider_id, provider_name, model, alias,
-           stream, status, duration_ms, prompt_tokens, completion_tokens, error_code, error_message, body_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+      await this.db.exec(
+        `INSERT INTO request_logs (id, ts, source, client_key_id, provider_id, provider_name, model, alias,
+         stream, status, duration_ms, prompt_tokens, completion_tokens, error_code, error_message, body_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
           input.id,
           input.ts,
           input.source,
@@ -52,19 +54,20 @@ export class RequestLogs {
           input.error_code ?? null,
           input.error_message ?? null,
           input.body_json ?? null,
-        );
+        ],
+      );
     } catch (err) {
       log.error('failed to persist request log', { err: String(err) });
     }
   }
 
-  list(filters: {
+  async list(filters: {
     provider_id?: string | null;
     status?: 'ok' | 'error' | null;
     since?: number | null;
     limit?: number;
     offset?: number;
-  }): { rows: RequestLogRecord[]; total: number } {
+  }): Promise<{ rows: RequestLogRecord[]; total: number }> {
     const conditions: string[] = [];
     const values: (string | number)[] = [];
     if (filters.provider_id) {
@@ -80,30 +83,32 @@ export class RequestLogs {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = Math.min(Math.max(filters.limit ?? 50, 1), 200);
     const offset = Math.max(filters.offset ?? 0, 0);
-    const countRow = this.db.prepare(`SELECT COUNT(*) AS n FROM request_logs ${where}`).get(...values) as { n: number };
-    const rows = this.db
-      .prepare(`SELECT * FROM request_logs ${where} ORDER BY ts DESC LIMIT ? OFFSET ?`)
-      .all(...values, limit, offset) as Array<Record<string, unknown>>;
+    const countRow = (await this.db.query(`SELECT COUNT(*) AS n FROM request_logs ${where}`, values))[0] as { n: number };
+    const rows = (await this.db.query(
+      `SELECT * FROM request_logs ${where} ORDER BY ts DESC LIMIT ? OFFSET ?`,
+      [...values, limit, offset],
+    )) as Array<Record<string, unknown>>;
     return { rows: rows.map(rowToLog), total: countRow.n };
   }
 
-  find(id: string): RequestLogRecord | null {
-    const row = this.db.prepare('SELECT * FROM request_logs WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  async find(id: string): Promise<RequestLogRecord | null> {
+    const row = (await this.db.query('SELECT * FROM request_logs WHERE id = ?', [id]))[0] as
+      | Record<string, unknown>
+      | undefined;
     return row ? rowToLog(row) : null;
   }
 
   /** Deletes records older than retention. Returns rows removed. */
-  prune(retentionDays: number): number {
+  async prune(retentionDays: number): Promise<number> {
     const cutoff = Date.now() - retentionDays * 86_400_000;
-    const res = this.db.prepare('DELETE FROM request_logs WHERE ts < ?').run(cutoff);
-    return Number(res.changes);
+    return this.db.exec('DELETE FROM request_logs WHERE ts < ?', [cutoff]);
   }
 
-  clear(): void {
-    this.db.raw.exec('DELETE FROM request_logs;');
+  async clear(): Promise<void> {
+    await this.db.exec('DELETE FROM request_logs');
   }
 
-  stats(): {
+  async stats(): Promise<{
     providers_configured: number;
     providers_enabled: number;
     models_total: number;
@@ -115,23 +120,27 @@ export class RequestLogs {
     streaming_share_24h: number | null;
     recent_errors: { ts: number; provider_id: string | null; error_code: string | null; error_message: string | null; status: number }[];
     tokens_24h: { prompt: number; completion: number } | null;
-  } {
+  }> {
     const now = Date.now();
     const since24 = now - 86_400_000;
     const since7d = now - 7 * 86_400_000;
-    const count = (since: number) =>
-      (this.db.prepare('SELECT COUNT(*) AS n FROM request_logs WHERE ts >= ? AND source != ?').get(since, 'connection_test') as { n: number }).n;
-    const agg24 = this.db
-      .prepare(
-        `SELECT COUNT(*) AS total,
-                SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) AS ok,
-                AVG(duration_ms) AS avg,
-                SUM(prompt_tokens) AS prompt,
-                SUM(completion_tokens) AS completion,
-                SUM(CASE WHEN stream = 1 THEN 1 ELSE 0 END) AS streamed
-         FROM request_logs WHERE ts >= ? AND source != ?`,
-      )
-      .get(since24, 'connection_test') as {
+    const count = async (since: number) => {
+      const row = (await this.db.query('SELECT COUNT(*) AS n FROM request_logs WHERE ts >= ? AND source != ?', [
+        since,
+        'connection_test',
+      ]))[0] as { n: number };
+      return row.n;
+    };
+    const agg24 = (await this.db.query(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) AS ok,
+              AVG(duration_ms) AS avg,
+              SUM(prompt_tokens) AS prompt,
+              SUM(completion_tokens) AS completion,
+              SUM(CASE WHEN stream = 1 THEN 1 ELSE 0 END) AS streamed
+       FROM request_logs WHERE ts >= ? AND source != ?`,
+      [since24, 'connection_test'],
+    ))[0] as {
       total: number;
       ok: number | null;
       avg: number | null;
@@ -140,26 +149,23 @@ export class RequestLogs {
       streamed: number | null;
     };
     // p95 via sorted duration sample bound (last 1000)
-    const durations = (
-      this.db
-        .prepare('SELECT duration_ms FROM request_logs WHERE ts >= ? AND duration_ms IS NOT NULL ORDER BY duration_ms DESC LIMIT 1000')
-        .all(since24) as Array<{ duration_ms: number }>
-    ).map((r) => r.duration_ms);
+    const durationRows = (await this.db.query(
+      'SELECT duration_ms FROM request_logs WHERE ts >= ? AND duration_ms IS NOT NULL ORDER BY duration_ms DESC LIMIT 1000',
+      [since24],
+    )) as Array<{ duration_ms: number }>;
+    const durations = durationRows.map((r) => r.duration_ms);
     durations.sort((a, b) => a - b);
     const p95 = durations.length > 0 ? durations[Math.floor(0.95 * (durations.length - 1))]! : null;
 
-    const providerCounts = this.db
-      .prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled FROM providers')
-      .get() as { total: number; enabled: number | null };
+    const providerCounts = (await this.db.query(
+      'SELECT COUNT(*) AS total, SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled FROM providers',
+    ))[0] as { total: number; enabled: number | null };
 
-    const recentErrors = (
-      this.db
-        .prepare(
-          `SELECT ts, provider_id, error_code, error_message, status FROM request_logs
-           WHERE status >= 400 AND source != 'connection_test' ORDER BY ts DESC LIMIT 8`,
-        )
-        .all() as Array<Record<string, unknown>>
-    ).map((r) => ({
+    const recentErrorRows = (await this.db.query(
+      `SELECT ts, provider_id, error_code, error_message, status FROM request_logs
+       WHERE status >= 400 AND source != 'connection_test' ORDER BY ts DESC LIMIT 8`,
+    )) as Array<Record<string, unknown>>;
+    const recentErrors = recentErrorRows.map((r) => ({
       ts: Number(r['ts']),
       provider_id: (r['provider_id'] as string | null) ?? null,
       error_code: (r['error_code'] as string | null) ?? null,
@@ -171,9 +177,9 @@ export class RequestLogs {
     return {
       providers_configured: Number(providerCounts.total ?? 0),
       providers_enabled: Number(providerCounts.enabled ?? 0),
-      models_total: (this.db.prepare('SELECT COUNT(*) AS n FROM models').get() as { n: number }).n,
+      models_total: ((await this.db.query('SELECT COUNT(*) AS n FROM models'))[0] as { n: number }).n,
       requests_24h: total24,
-      requests_7d: count(since7d),
+      requests_7d: await count(since7d),
       success_rate_24h: total24 > 0 && agg24.ok !== null ? Number(agg24.ok) / total24 : null,
       avg_latency_ms_24h: agg24.avg !== null ? Math.round(Number(agg24.avg)) : null,
       p95_latency_ms_24h: p95,
@@ -186,18 +192,17 @@ export class RequestLogs {
     };
   }
 
-  activitySeries24h(): { bucket: number; total: number; errors: number }[] {
+  async activitySeries24h(): Promise<{ bucket: number; total: number; errors: number }[]> {
     const now = Date.now();
     const since = now - 24 * 3600_000;
-    const rows = this.db
-      .prepare(
-        `SELECT CAST(ts / 3600000 AS INTEGER) AS h,
-                COUNT(*) AS total,
-                SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors
-         FROM request_logs WHERE ts >= ? AND source != 'connection_test'
-         GROUP BY h ORDER BY h ASC`,
-      )
-      .all(since) as Array<{ h: number; total: number; errors: number }>;
+    const rows = (await this.db.query(
+      `SELECT CAST(ts / 3600000 AS INTEGER) AS h,
+              COUNT(*) AS total,
+              SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors
+       FROM request_logs WHERE ts >= ? AND source != 'connection_test'
+       GROUP BY h ORDER BY h ASC`,
+      [since],
+    )) as Array<{ h: number; total: number; errors: number }>;
     return rows.map((r) => ({ bucket: r.h * 3_600_000, total: Number(r.total), errors: Number(r.errors) }));
   }
 }

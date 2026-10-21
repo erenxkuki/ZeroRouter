@@ -1,8 +1,9 @@
 /**
  * Privacy Policy — describes what the running implementation actually does:
- * local SQLite storage, scrypt-hashed credentials, AES-encrypted upstream
- * secrets, differential logging with opt-in request bodies, and pruning.
- * No invented guarantees beyond what the code enforces.
+ * storage on SQLite or the configured Postgres instance, scrypt-hashed
+ * credentials, AES-encrypted upstream secrets, differential logging with
+ * opt-in request bodies, and pruning. No invented guarantees beyond what the
+ * code enforces.
  */
 import { Link } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
@@ -22,21 +23,27 @@ export function PrivacyPage({ session }: { session: SessionInfo | null }) {
 
           <h2>1. Where data lives</h2>
           <p>
-            ZeroRouter is self-hosted. Everything it stores lives on the machine
-            it runs on, in an SQLite database under <code>ZEROROUTER_DATA_DIR</code>{' '}
-            (default <code>./data</code>). There is no third-party analytics, no
-            telemetry and no account system. The only network calls the gateway
-            makes are the ones you cause: routing chat requests to the upstream
-            providers you configured, and model discovery against them.
+            ZeroRouter is self-hosted. Everything it stores lives in a database
+            you control: an SQLite file under <code>ZEROROUTER_DATA_DIR</code>{' '}
+            (default <code>./data</code>) by default, or the Postgres instance
+            you configure via <code>ZEROROUTER_DATABASE_URL</code> — for
+            example your own Supabase project. There is no third-party
+            analytics, no telemetry and no account system. The only network
+            calls the gateway makes are the ones you cause: routing chat
+            requests to the upstream providers you configured, model discovery
+            against them, and (in hosted deployments) talking to the database
+            you pointed it at.
           </p>
 
           <h2>2. Credentials and how they are handled</h2>
           <ul>
             <li>
               <strong>Owner sign-in.</strong> A single owner credential is
-              provisioned locally through the owner CLI. Only the username and a
-              scrypt salted hash are stored in the local database — the
-              plaintext password is never persisted, logged or sent anywhere.
+              provisioned through the owner CLI (shell access to the machine
+              that stores the data — there is no HTTP path to provisioning).
+              Only the username and a scrypt salted hash are stored in the
+              gateway database — the plaintext password is never persisted,
+              logged or sent anywhere.
             </li>
             <li>
               <strong>Dashboard sessions.</strong> Sign-in creates a server-side
@@ -53,9 +60,10 @@ export function PrivacyPage({ session }: { session: SessionInfo | null }) {
             <li>
               <strong>Upstream provider credentials.</strong> Secrets you enter
               for providers (API keys for Anthropic, OpenAI-compatible endpoints,
-              etc.) are AES-encrypted at rest with a local master key stored in
-              the data directory with restrictive file permissions. They are
-              decrypted only in memory when a request is routed.
+              etc.) are AES-encrypted at rest with a master key taken from the
+              <code>ZEROROUTER_MASTER_KEY</code> secret or from the data
+              directory — never from the database. They are decrypted only in
+              memory when a request is routed.
             </li>
           </ul>
 
@@ -73,8 +81,8 @@ export function PrivacyPage({ session }: { session: SessionInfo | null }) {
           <h2>4. Logging</h2>
           <ul>
             <li>
-              The gateway writes local request logs: timestamp, model id,
-              provider, status, latency and token usage.
+              The gateway writes request logs to its database: timestamp, model
+              id, provider, status, latency and token usage.
             </li>
             <li>
               Full request and response bodies are recorded <em>only</em> when
@@ -91,9 +99,11 @@ export function PrivacyPage({ session }: { session: SessionInfo | null }) {
             Everything is deletable: request logs (immediately, from the
             console), individual keys, aliases, models or providers, sessions
             (sign-out or server-side revocation). Removing the owner credential
-            is done through the owner CLI, and deleting the data directory
-            removes every piece of state the gateway has. Deleting upstream
-            account data remains subject to the relevant provider's own process.
+            is done through the owner CLI. Deleting the data directory removes
+            all local state; in the Postgres mode, dropping the database (or
+            the gateway's tables) removes all hosted state. Deleting upstream
+            account data remains subject to the relevant provider's own
+            process.
           </p>
 
           <h2>6. What this policy does not do</h2>

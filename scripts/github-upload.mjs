@@ -207,9 +207,9 @@ async function main() {
   }
 
   console.log(`\n✔ Done: ${files.length} files committed to ${repo.html_url} (${branch} @ ${commit.sha.slice(0, 8)})`);
-  console.log('\nDeploy note: connect this repo at a host that supports persistent disks + long-running');
-  console.log('Node (Railway / Fly.io / your own VPS). Do NOT use serverless hosts (Vercel/Netlify) for');
-  console.log('the backend — their ephemeral filesystem would wipe gateway.db + .master_key on every deploy.');
+  console.log('\nDeploy note: with ZEROROUTER_DATABASE_URL set (Postgres/Supabase) ZeroRouter deploys to');
+  console.log('Vercel as-is — see docs/vercel-deploy.md (serverless function + static console). Local SQLite');
+  console.log('mode needs a persistent-disk host (Railway / Fly.io / VPS), not a serverless one.');
 }
 
 export { walk, isSkipped };

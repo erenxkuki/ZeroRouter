@@ -17,14 +17,14 @@ import { OwnerAuthService } from '../services/ownerAuth.js';
 import { LoginThrottleService, LOGIN_THROTTLE_DEFAULTS, loginKeyHash } from '../services/loginThrottle.js';
 import { setSessionCookie, secureCookieFor, clientAddressOf, SESSION_COOKIE } from '../middleware.js';
 
-export function makeService(opts: { envPassword?: string | null; dir?: string } = {}) {
+export async function makeService(opts: { envPassword?: string | null; dir?: string } = {}) {
   const dir = opts.dir ?? mkdtempSync(path.join(os.tmpdir(), 'zr-auth-unit-'));
   const db = new Db(path.join(dir, 'gateway.db'));
-  db.migrate();
+  await db.migrate();
   const ownerRepo = new OwnerCredentialRepo(db);
   const sessions = new SessionRepo(db);
   const throttleRepo = new LoginThrottleRepo(db);
-  const service = new OwnerAuthService({
+  const service = await OwnerAuthService.create({
     db,
     ownerRepo,
     sessions,
@@ -57,14 +57,14 @@ describe('OwnerAuthService', () => {
   const PQ = 'correct-horse-battery-staple';
 
   it('resolves loopback_only mode when nothing is configured', async () => {
-    const { service } = makeService();
+    const { service } = await makeService();
     expect(service.mode).toBe('loopback_only');
     expect(service.credentialRequired).toBe(false);
     expect(await service.verify(null, 'anything')).toBe(false);
   });
 
   it('environment mode verifies from the deployment password (username is not a factor)', async () => {
-    const { service } = makeService({ envPassword: 'env-secret-123' });
+    const { service } = await makeService({ envPassword: 'env-secret-123' });
     expect(service.mode).toBe('environment');
     expect(await service.verify(null, 'env-secret-123')).toBe(true);
     expect(await service.verify('someone', 'env-secret-123')).toBe(true);
@@ -75,7 +75,7 @@ describe('OwnerAuthService', () => {
   it(
     'provisions the owner credential into database mode and verifies both factors',
     async () => {
-      const { service, ownerRepo } = makeService();
+      const { service, ownerRepo } = await makeService();
       await service.provision('Owner', PQ);
       expect(service.mode).toBe('database');
       expect(service.username).toBe('owner');
@@ -86,7 +86,7 @@ describe('OwnerAuthService', () => {
       expect(await service.verify('owner', PQ + 'x')).toBe(false);
       expect(await service.verify('wrong-owner', PQ)).toBe(false);
       // stored hash never contains the plaintext and uses the v1 scrypt format
-      const row = ownerRepo.get();
+      const row = await ownerRepo.get();
       expect(row?.username).toBe('owner');
       expect(row?.passwordHash.startsWith('v1$')).toBe(true);
       expect(row?.passwordHash).not.toContain(PQ);
@@ -95,7 +95,7 @@ describe('OwnerAuthService', () => {
   );
 
   it('rejects provisioning inputs that violate policy', async () => {
-    const { service } = makeService();
+    const { service } = await makeService();
     await expect(service.provision('Bad Name!', PQ)).rejects.toThrow();
     await expect(service.provision('owner', 'short')).rejects.toThrow();
     await expect(service.provision('owner', '')).rejects.toThrow();
@@ -104,7 +104,7 @@ describe('OwnerAuthService', () => {
   it(
     'database mode takes priority over the environment fallback',
     async () => {
-      const { service } = makeService({ envPassword: 'env-secret-123' });
+      const { service } = await makeService({ envPassword: 'env-secret-123' });
       await service.provision('owner', PQ);
       expect(service.mode).toBe('database');
       expect(await service.verify('owner', 'env-secret-123')).toBe(false);
@@ -116,11 +116,11 @@ describe('OwnerAuthService', () => {
   it(
     'rotating (re-provisioning) the credential revokes every session and clears throttles',
     async () => {
-      const { service, sessions, throttleRepo } = makeService();
-      const s1 = sessions.create(60_000);
-      const s2 = sessions.create(60_000);
-      expect(sessions.valid(s1.id)).toBe(true);
-      throttleRepo.upsert({
+      const { service, sessions, throttleRepo } = await makeService();
+      const s1 = await sessions.create(60_000);
+      const s2 = await sessions.create(60_000);
+      expect(await sessions.valid(s1.id)).toBe(true);
+      await throttleRepo.upsert({
         keyHash: 'abc',
         attemptWindowStart: Date.now(),
         attemptCount: 9,
@@ -129,96 +129,96 @@ describe('OwnerAuthService', () => {
         cooldownUntil: Date.now() + 60_000,
       });
       await service.provision('owner', 'replaced-password-2');
-      expect(sessions.valid(s1.id)).toBe(false);
-      expect(sessions.valid(s2.id)).toBe(false);
+      expect(await sessions.valid(s1.id)).toBe(false);
+      expect(await sessions.valid(s2.id)).toBe(false);
       expect(await service.verify('owner', 'replaced-password-2')).toBe(true);
       expect(await service.verify('owner', PQ)).toBe(false);
-      expect(throttleRepo.get('abc')).toBeNull();
+      expect(await throttleRepo.get('abc')).toBeNull();
     },
     20_000,
   );
 });
 
 describe('LoginThrottleService', () => {
-  const mk = () => {
+  const mk = async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'zr-throttle-unit-'));
     const db = new Db(path.join(dir, 'gateway.db'));
-    db.migrate();
+    await db.migrate();
     const svc = new LoginThrottleService(new LoginThrottleRepo(db), { ...LOGIN_THROTTLE_DEFAULTS });
     return { svc, key: loginKeyHash('127.0.0.1') };
   };
 
-  it('allows the first attempts and hashes addresses stably', () => {
-    const { svc, key } = mk();
-    expect(svc.precheck(key)).toBeNull();
+  it('allows the first attempts and hashes addresses stably', async () => {
+    const { svc, key } = await mk();
+    expect(await svc.precheck(key)).toBeNull();
     expect(loginKeyHash('127.0.0.1')).toBe(loginKeyHash('127.0.0.1'));
     expect(loginKeyHash('127.0.0.1')).not.toBe(loginKeyHash('10.0.0.8'));
     expect(loginKeyHash(null)).toBe(loginKeyHash(null));
   });
 
-  it('blocks attempts beyond the per-minute attempt bucket (Retry-After > 0)', () => {
-    const { svc, key } = mk();
+  it('blocks attempts beyond the per-minute attempt bucket (Retry-After > 0)', async () => {
+    const { svc, key } = await mk();
     for (let i = 0; i < LOGIN_THROTTLE_DEFAULTS.attemptLimit; i += 1) {
-      expect(svc.precheck(key)).toBeNull();
-      svc.consume(key);
+      expect(await svc.precheck(key)).toBeNull();
+      await svc.consume(key);
     }
-    const retry = svc.precheck(key);
+    const retry = await svc.precheck(key);
     expect(retry).not.toBeNull();
     expect(retry as number).toBeGreaterThan(0);
   });
 
-  it('applies a progressive cooldown from the 3rd consecutive failure', () => {
-    const { svc, key } = mk();
+  it('applies a progressive cooldown from the 3rd consecutive failure', async () => {
+    const { svc, key } = await mk();
     const now = Date.now();
-    svc.recordFailure(key, now);
-    expect(svc.precheck(key, now + 1)).toBeNull(); // failures 1–2: no cooldown
-    svc.recordFailure(key, now + 2);
-    svc.recordFailure(key, now + 3);
-    expect(svc.precheck(key, now + 3)).toBe(500); // 3rd failure: 0.5 s
-    svc.recordFailure(key, now + 4);
-    expect(svc.precheck(key, now + 4)).toBe(1000);
-    svc.recordFailure(key, now + 5);
-    expect(svc.precheck(key, now + 5)).toBe(2000);
-    svc.recordFailure(key, now + 6);
-    svc.recordFailure(key, now + 7);
-    svc.recordFailure(key, now + 8);
-    expect(svc.precheck(key, now + 8)).toBe(16_000);
+    await svc.recordFailure(key, now);
+    expect(await svc.precheck(key, now + 1)).toBeNull(); // failures 1–2: no cooldown
+    await svc.recordFailure(key, now + 2);
+    await svc.recordFailure(key, now + 3);
+    expect(await svc.precheck(key, now + 3)).toBe(500); // 3rd failure: 0.5 s
+    await svc.recordFailure(key, now + 4);
+    expect(await svc.precheck(key, now + 4)).toBe(1000);
+    await svc.recordFailure(key, now + 5);
+    expect(await svc.precheck(key, now + 5)).toBe(2000);
+    await svc.recordFailure(key, now + 6);
+    await svc.recordFailure(key, now + 7);
+    await svc.recordFailure(key, now + 8);
+    expect(await svc.precheck(key, now + 8)).toBe(16_000);
   });
 
-  it('caps the cooldown so the owner is never permanently locked out', () => {
-    const { svc, key } = mk();
+  it('caps the cooldown so the owner is never permanently locked out', async () => {
+    const { svc, key } = await mk();
     const now = Date.now();
-    for (let i = 1; i <= 40; i += 1) svc.recordFailure(key, now + i);
-    const retry = svc.precheck(key, now + 41);
+    for (let i = 1; i <= 40; i += 1) await svc.recordFailure(key, now + i);
+    const retry = await svc.precheck(key, now + 41);
     expect(retry as number).toBeLessThanOrEqual(LOGIN_THROTTLE_DEFAULTS.maxCooldownMs);
   });
 
-  it('expires cooldowns and resets continuously-failing windows', () => {
-    const { svc, key } = mk();
+  it('expires cooldowns and resets continuously-failing windows', async () => {
+    const { svc, key } = await mk();
     const now = Date.now();
-    for (let i = 1; i <= 6; i += 1) svc.recordFailure(key, now + i);
+    for (let i = 1; i <= 6; i += 1) await svc.recordFailure(key, now + i);
     const later = now + LOGIN_THROTTLE_DEFAULTS.maxCooldownMs + 5;
-    expect(svc.precheck(key, later)).toBeNull();
+    expect(await svc.precheck(key, later)).toBeNull();
     // failure window elapsed → counter restarts instead of compounding
-    svc.recordFailure(key, now + LOGIN_THROTTLE_DEFAULTS.failureWindowMs + 5);
-    expect(svc.precheck(key, now + LOGIN_THROTTLE_DEFAULTS.failureWindowMs + 6)).toBeNull();
+    await svc.recordFailure(key, now + LOGIN_THROTTLE_DEFAULTS.failureWindowMs + 5);
+    expect(await svc.precheck(key, now + LOGIN_THROTTLE_DEFAULTS.failureWindowMs + 6)).toBeNull();
   });
 
-  it('a successful login clears all state for that client', () => {
-    const { svc, key } = mk();
-    for (let i = 1; i <= 6; i += 1) svc.recordFailure(key);
-    expect(svc.precheck(key)).not.toBeNull();
-    for (let i = 0; i < LOGIN_THROTTLE_DEFAULTS.attemptLimit; i += 1) svc.consume(key);
-    expect(svc.precheck(key)).not.toBeNull();
-    svc.recordSuccess(key);
-    expect(svc.precheck(key)).toBeNull();
+  it('a successful login clears all state for that client', async () => {
+    const { svc, key } = await mk();
+    for (let i = 1; i <= 6; i += 1) await svc.recordFailure(key);
+    expect(await svc.precheck(key)).not.toBeNull();
+    for (let i = 0; i < LOGIN_THROTTLE_DEFAULTS.attemptLimit; i += 1) await svc.consume(key);
+    expect(await svc.precheck(key)).not.toBeNull();
+    await svc.recordSuccess(key);
+    expect(await svc.precheck(key)).toBeNull();
   });
 
-  it('prunes stale rows', () => {
-    const { svc, key } = mk();
-    svc.recordFailure(key, 1_000);
-    svc.prune(Date.now() + 25 * 3600_000);
-    expect(svc.precheck(key, Date.now())).toBeNull();
+  it('prunes stale rows', async () => {
+    const { svc, key } = await mk();
+    await svc.recordFailure(key, 1_000);
+    await svc.prune(Date.now() + 25 * 3600_000);
+    expect(await svc.precheck(key, Date.now())).toBeNull();
   });
 });
 

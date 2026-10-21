@@ -54,7 +54,10 @@ export function createApp(deps: AppModuleDeps): Hono<AppEnv> {
       [
         "default-src 'self'",
         "script-src 'self'",
-        "style-src 'self'",
+        // 'unsafe-inline' on styles only: React sets CSS custom properties via
+        // the style attribute (animation stagger, SVG effects). Scripts stay
+        // strictly 'self' — the strictness that matters lives here.
+        "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data:",
         "font-src 'self' data:",
         "connect-src 'self'",

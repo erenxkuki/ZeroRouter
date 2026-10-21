@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 
-/** One 24h-activity sparkline drawn with inline SVG (no chart dependency). */
+/** One 24h-activity sparkline drawn with inline SVG (no chart dependency).
+ *  Bars grow in on mount (CSS `zr-sparkbar`, staggered per column index). */
 export function Sparkbars({ buckets, height = 56 }: { buckets: { bucket: number; total: number; errors: number }[]; height?: number }): ReactNode {
   const width = 480;
   const cols = buckets.slice(-48); // 30-min buckets → 24h
@@ -21,7 +22,8 @@ export function Sparkbars({ buckets, height = 56 }: { buckets: { bucket: number;
             width={barW}
             height={h}
             rx="1"
-            className={errored ? 'fill-danger/70' : 'fill-cyan/60'}
+            className={`zr-sparkbar ${errored ? 'fill-danger/70' : 'fill-cyan/60'}`}
+            style={{ ['--bi' as string]: i }}
           />
         );
       })}

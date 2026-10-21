@@ -155,9 +155,12 @@ export function Modal({
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-[12vh] backdrop-blur-[2px]" onMouseDown={onClose}>
+    <div
+      className="zr-modal-overlay fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-[12vh] backdrop-blur-[2px]"
+      onMouseDown={onClose}
+    >
       <div
-        className={`w-full ${width} rounded-[10px] border border-hairline-strong bg-panel shadow-2xl shadow-black/50`}
+        className={`zr-modal-card w-full ${width} rounded-[10px] border border-hairline-strong bg-panel shadow-2xl shadow-black/50`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-hairline px-4 py-3">
@@ -174,7 +177,7 @@ export function Modal({
 
 export function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: 'amber' | 'cyan' }) {
   return (
-    <div className="rounded-[10px] border border-hairline bg-panel p-4">
+    <div className="zr-stat rounded-[10px] border border-hairline bg-panel p-4">
       <div className="zr-label pb-1.5">{label}</div>
       <div className={`font-display text-[26px] font-semibold leading-7 tracking-tight tabular-nums ${tone === 'amber' ? 'text-amber' : tone === 'cyan' ? 'text-cyan' : 'text-ink'}`}>
         {value}

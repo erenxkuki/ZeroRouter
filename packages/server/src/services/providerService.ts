@@ -1,6 +1,6 @@
 import { ApiError } from '../errors.js';
 import { logger } from '../logger.js';
-import type { Db } from '../db/database.js';
+import type { StorageBackend } from '../db/storage.js';
 import { ProviderRepo, ModelRepo, ProviderEventRepo, AliasRepo } from '../db/repos.js';
 import { getAdapter, listAdapters } from '../adapters/registry.js';
 import type { AdapterContext } from '../adapters/base.js';
@@ -35,7 +35,7 @@ export class ProviderService {
   private discoveryInFlight = new Map<string, Promise<DiscoverySummary>>();
 
   constructor(
-    private readonly db: Db,
+    private readonly db: StorageBackend,
     private readonly providers: ProviderRepo,
     private readonly models: ModelRepo,
     private readonly events: ProviderEventRepo,
@@ -43,18 +43,18 @@ export class ProviderService {
     private readonly makeHooks: (policy: UrlPolicy) => ReturnType<typeof makeTransportHooks>,
   ) {}
 
-  list(): ProviderRecord[] {
-    return this.providers.list().map((p) => ({ ...p }));
+  async list(): Promise<ProviderRecord[]> {
+    return (await this.providers.list()).map((p) => ({ ...p }));
   }
 
-  get(id: string): ProviderRecord {
-    const p = this.providers.get(id);
+  async get(id: string): Promise<ProviderRecord> {
+    const p = await this.providers.get(id);
     if (!p) throw ApiError.notFound(`Provider "${id}" not found.`);
     return p;
   }
 
   /** Public projection for the dashboard — never includes credentials. */
-  toApi(p: ProviderRecord): Record<string, unknown> {
+  async toApi(p: ProviderRecord): Promise<Record<string, unknown>> {
     return {
       id: p.id,
       name: p.name,
@@ -72,22 +72,22 @@ export class ProviderService {
       last_test_at: p.last_test_at,
       discovery_status: p.discovery_status,
       last_discovery: p.last_discovery,
-      model_count: this.models.countForProvider(p.id),
+      model_count: await this.models.countForProvider(p.id),
       created_at: p.created_at,
       updated_at: p.updated_at,
     };
   }
 
-  create(input: ProviderUpsertInput): ProviderRecord {
+  async create(input: ProviderUpsertInput): Promise<ProviderRecord> {
     const adapter = getAdapter(input.adapter);
     if (!adapter) {
       throw ApiError.badRequest(`Unknown adapter "${input.adapter}".`, { adapters: listAdapters().map((a) => a.id) }, 'invalid_request');
     }
-    if (input.id) {
-      if (this.providers.get(input.id)) throw ApiError.conflict(`Provider id "${input.id}" already exists.`, undefined, 'not_found');
+    if (input.id && (await this.providers.get(input.id))) {
+      throw ApiError.conflict(`Provider id "${input.id}" already exists.`, undefined, 'not_found');
     }
     const id = input.id ?? slugid(input.name);
-    if (this.providers.get(id)) throw ApiError.conflict(`Provider id "${id}" already exists.`, undefined, 'not_found');
+    if (await this.providers.get(id)) throw ApiError.conflict(`Provider id "${id}" already exists.`, undefined, 'not_found');
 
     // Merge credentials: extra headers may be provided without an api key
     const credentials = readCredentialsInput(input, null, input.auth_type);
@@ -105,7 +105,7 @@ export class ProviderService {
     if (input.base_url) {
       parseTargetUrl(input.base_url, providerUrlPolicy(config.config)); // throws ApiError on violation
     }
-    const created = this.providers.create({
+    const created = await this.providers.create({
       id,
       name: input.name,
       adapter: input.adapter,
@@ -118,12 +118,12 @@ export class ProviderService {
       timeout_ms: input.timeout_ms ?? 120_000,
       retry_max: input.retry_max ?? 1,
     });
-    this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Provider created.', latency_ms: null });
+    await this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Provider created.', latency_ms: null });
     return created;
   }
 
-  update(id: string, patch: Partial<ProviderUpsertInput>): ProviderRecord {
-    const current = this.get(id);
+  async update(id: string, patch: Partial<ProviderUpsertInput>): Promise<ProviderRecord> {
+    const current = await this.get(id);
     const adapter = getAdapter(patch.adapter ?? current.adapter);
     if (!adapter) throw ApiError.badRequest(`Unknown adapter "${String(patch.adapter)}".`);
     const mergedConfig = { ...current.config, ...(patch.config ?? {}) };
@@ -150,7 +150,7 @@ export class ProviderService {
           ? { credentials: cleanCredentials(base) }
           : { clearCredentials: true };
       if (base.api_key !== existing?.api_key || patch.extra_headers !== undefined) {
-        this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Credentials updated.', latency_ms: null });
+        await this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Credentials updated.', latency_ms: null });
       }
     }
     const authType: AuthType = patch.auth_type ?? current.auth_type;
@@ -163,7 +163,7 @@ export class ProviderService {
       parseTargetUrl(mergedBaseUrl, providerUrlPolicy(configValidated.config)); // throws ApiError on violation
     }
 
-    this.providers.update(id, {
+    await this.providers.update(id, {
       name: patch.name,
       enabled: patch.enabled,
       base_url: patch.base_url,
@@ -175,7 +175,7 @@ export class ProviderService {
       ...credentialsPatch,
     });
     if (patch.enabled !== undefined && patch.enabled !== current.enabled) {
-      this.events.add({
+      await this.events.add({
         provider_id: id,
         ts: Date.now(),
         kind: patch.enabled ? 'enable' : 'disable',
@@ -184,13 +184,13 @@ export class ProviderService {
         latency_ms: null,
       });
     }
-    this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Configuration updated.', latency_ms: null });
+    await this.events.add({ provider_id: id, ts: Date.now(), kind: 'credentials', status: 'ok', message: 'Configuration updated.', latency_ms: null });
     return this.get(id);
   }
 
   /** Removal guard: aliases referencing the provider block deletion unless forced. */
-  remove(id: string, force: boolean): { removed: boolean; blockedByAliases?: string[] } {
-    const aliases = this.aliasesRepo.list();
+  async remove(id: string, force: boolean): Promise<{ removed: boolean; blockedByAliases?: string[] }> {
+    const aliases = await this.aliasesRepo.list();
     const blockers = [
       ...new Set(
         aliases
@@ -201,7 +201,7 @@ export class ProviderService {
     if (blockers.length > 0 && !force) {
       return { removed: false, blockedByAliases: blockers };
     }
-    this.providers.delete(id);
+    await this.providers.delete(id);
     return { removed: true };
   }
 
@@ -212,7 +212,7 @@ export class ProviderService {
   /* ───────── connection test ───────── */
 
   async testConnection(id: string): Promise<{ ok: boolean; message: string; latencyMs: number | null }> {
-    const provider = this.get(id);
+    const provider = await this.get(id);
     const adapter = getAdapter(provider.adapter);
     if (!adapter) throw ApiError.internal(`Unknown adapter "${provider.adapter}".`);
     const cfg = providerUrlPolicy(provider.config);
@@ -231,8 +231,8 @@ export class ProviderService {
       test_status: result.ok ? 'ok' : 'failed',
       test_message: result.message,
       last_test_at: Date.now(),
-    });
-    this.events.add({
+    }).catch((err) => log.error('failed to persist connection test', { err: String(err) }));
+    await this.events.add({
       provider_id: id,
       ts: Date.now(),
       kind: 'connection_test',
@@ -246,8 +246,8 @@ export class ProviderService {
 
   /* ───────── model discovery ───────── */
 
-  discoveryStatusOf(id: string): { status: ProviderRecord['discovery_status']; summary: DiscoverySummary | null } {
-    const p = this.get(id);
+  async discoveryStatusOf(id: string): Promise<{ status: ProviderRecord['discovery_status']; summary: DiscoverySummary | null }> {
+    const p = await this.get(id);
     return { status: p.discovery_status, summary: p.last_discovery };
   }
 
@@ -266,14 +266,16 @@ export class ProviderService {
     const started = Date.now();
     let provider: ProviderRecord;
     try {
-      provider = this.get(id);
+      provider = await this.get(id);
     } catch {
       throw ApiError.notFound(`Provider "${id}" not found.`);
     }
     const adapter = getAdapter(provider.adapter);
     if (!adapter) throw ApiError.internal(`Unknown adapter "${provider.adapter}".`);
 
-    this.providers.update(id, { discovery_status: 'connecting' });
+    this.providers.update(id, { discovery_status: 'connecting' }).catch((err) =>
+      log.warn('failed to set discovery_status=connecting', { err: String(err) }),
+    );
 
     try {
       const cfg = providerUrlPolicy(provider.config);
@@ -282,14 +284,18 @@ export class ProviderService {
         credentials: this.providers.credentials(provider),
         transport: this.makeHooks(cfg),
       };
-      this.providers.update(id, { discovery_status: 'discovering' });
+      this.providers.update(id, { discovery_status: 'discovering' }).catch((err) =>
+        log.warn('failed to set discovery_status=discovering', { err: String(err) }),
+      );
       const outcome = await adapter.discover(ctx);
       const now = Date.now();
       let created = 0;
       let updated = 0;
-      this.db.transaction(() => {
+      // Tx-scoped ModelRepo instance: every upsert joins the same transaction.
+      await this.db.transaction(async (tx) => {
+        const models = new ModelRepo(tx);
         for (const model of outcome.models) {
-          const res = this.models.upsertDiscovered(id, model, now);
+          const res = await models.upsertDiscovered(id, model, now);
           if (res.created) created += 1;
           else if (res.updated) updated += 1;
         }
@@ -306,8 +312,8 @@ export class ProviderService {
       this.providers.update(id, {
         discovery_status: outcome.partial ? 'partial' : 'completed',
         last_discovery: summary,
-      });
-      this.events.add({
+      }).catch((err) => log.warn('failed to persist discovery summary', { err: String(err) }));
+      await this.events.add({
         provider_id: id,
         ts: now,
         kind: 'discovery',
@@ -328,8 +334,10 @@ export class ProviderService {
         error: errApi?.message ?? (err instanceof Error ? err.message : String(err)),
         duration_ms: now - started,
       };
-      this.providers.update(id, { discovery_status: 'failed', last_discovery: summary });
-      this.events.add({
+      this.providers.update(id, { discovery_status: 'failed', last_discovery: summary }).catch((err) =>
+        log.warn('failed to persist discovery failure', { err: String(err) }),
+      );
+      await this.events.add({
         provider_id: id,
         ts: now,
         kind: 'discovery',
@@ -338,7 +346,7 @@ export class ProviderService {
         latency_ms: summary.duration_ms,
       });
       if (errApi?.code === 'provider_auth_failed') {
-        this.events.add({ provider_id: id, ts: now, kind: 'auth_issue', status: 'failed', message: summary.error ?? 'Authentication failed during discovery.', latency_ms: null });
+        await this.events.add({ provider_id: id, ts: now, kind: 'auth_issue', status: 'failed', message: summary.error ?? 'Authentication failed during discovery.', latency_ms: null });
       }
       log.warn('discovery failed', { provider: id, error: summary.error });
       throw errApi ?? ApiError.internal();
@@ -347,7 +355,7 @@ export class ProviderService {
 
   /* ───────── manual models ───────── */
 
-  addManualModel(id: string, input: {
+  async addManualModel(id: string, input: {
     upstream_id: string;
     display_name?: string;
     context_length?: number | null;
@@ -356,9 +364,9 @@ export class ProviderService {
     streaming?: boolean | null;
     tools?: boolean | null;
     pricing?: { prompt_per_token: string; completion_per_token: string } | null;
-  }): void {
-    this.get(id);
-    this.models.upsertManual(
+  }): Promise<void> {
+    await this.get(id);
+    await this.models.upsertManual(
       id,
       {
         upstreamId: input.upstream_id,
@@ -372,9 +380,9 @@ export class ProviderService {
       },
       Date.now(),
     );
-    const p = this.providers.get(id);
+    const p = await this.providers.get(id);
     if (p && p.discovery_status === 'untested') {
-      this.providers.update(id, { discovery_status: 'manual' });
+      await this.providers.update(id, { discovery_status: 'manual' });
     }
   }
 }

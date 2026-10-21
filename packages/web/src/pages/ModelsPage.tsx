@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BrainCircuit, Check, ChevronLeft, ChevronRight, Copy, RefreshCw, Search } from 'lucide-react';
 import { api, type AliasRecord, type ProviderModel, type ProviderApi } from '../api';
+import { getRuntimeOrigin } from '../lib/origin';
 import { Badge, EmptyState, ErrorNote, Loading, Panel, StatusDot } from '../ui';
 
 const SORTS: { id: string; label: string }[] = [
@@ -282,10 +283,10 @@ export function ModelsPage() {
 }
 
 /** Live base-URL examples for the unified gateway API. The origin is derived
- *  at runtime, so the same console shows correct URLs on localhost, a LAN box,
- *  or a deployed domain — no hardcoded host anywhere. */
+ *  at runtime via lib/origin, so the same console shows correct URLs on
+ *  localhost, a LAN box, or a deployed domain — no hardcoded host anywhere. */
 function ApiAccessCard() {
-  const origin = typeof window === 'undefined' ? 'http://localhost:8787' : window.location.origin;
+  const origin = getRuntimeOrigin();
   const [copied, setCopied] = useState<string | null>(null);
   const examples = [
     {

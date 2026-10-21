@@ -135,11 +135,11 @@ describe('dashboard auth (environment mode, real bootstrap)', () => {
 
   it('4. enforces session expiration server-side', async () => {
     // Rows created directly in the running server's DB — same storage logins use.
-    zr.db.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run('sess_expired-unit-test', Date.now(), Date.now() - 5);
-    zr.db.prepare('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)').run('sess_future-unit-test', Date.now(), Date.now() + 60_000);
+    await zr.db.exec('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)', ['sess_expired-unit-test', Date.now(), Date.now() - 5]);
+    await zr.db.exec('INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)', ['sess_future-unit-test', Date.now(), Date.now() + 60_000]);
     const sessions = new SessionRepo(zr.db);
-    expect(sessions.valid('sess_expired-unit-test')).toBe(false);
-    expect(sessions.valid('sess_future-unit-test')).toBe(true);
+    expect(await sessions.valid('sess_expired-unit-test')).toBe(false);
+    expect(await sessions.valid('sess_future-unit-test')).toBe(true);
 
     const res = await call(zr, 'GET', '/admin/overview', { headers: { cookie: 'zr_admin=sess_expired-unit-test' } });
     expect(res.status).toBe(401);
@@ -367,15 +367,16 @@ describe('dashboard auth (database mode, provisioned owner credential)', () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), 'zr-authC-'));
     // Provision exactly the way the owner CLI does (same service path).
     const db = new Db(path.join(dataDir, 'gateway.db'));
-    db.migrate();
-    await new OwnerAuthService({
+    await db.migrate();
+    const ownerAuth = await OwnerAuthService.create({
       db,
       ownerRepo: new OwnerCredentialRepo(db),
       sessions: new SessionRepo(db),
       loginThrottleRepo: new LoginThrottleRepo(db),
       envPassword: null,
-    }).provision('owner', DB_PASSWORD);
-    db.close();
+    });
+    await ownerAuth.provision('owner', DB_PASSWORD);
+    await db.close();
     zr = await bootstrap(bootOptions(dataDir, 2));
   }, 30_000);
 
@@ -412,15 +413,16 @@ describe('dashboard auth (database mode, provisioned owner credential)', () => {
 
     // Rotate via the same service path the CLI uses.
     const db = new Db(path.join(zr.config.dataDir, 'gateway.db'));
-    db.migrate();
-    await new OwnerAuthService({
+    await db.migrate();
+    const ownerAuth = await OwnerAuthService.create({
       db,
       ownerRepo: new OwnerCredentialRepo(db),
       sessions: new SessionRepo(db),
       loginThrottleRepo: new LoginThrottleRepo(db),
       envPassword: null,
-    }).provision('owner', 'rotated-password-99');
-    db.close();
+    });
+    await ownerAuth.provision('owner', 'rotated-password-99');
+    await db.close();
 
     const reuse = await call(zr, 'GET', '/admin/overview', { headers: { cookie } });
     expect(reuse.status).toBe(401);

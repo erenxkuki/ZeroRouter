@@ -60,16 +60,16 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
     }),
   );
 
-  app.get('/models', (c) => {
+  app.get('/models', async (c) => {
     const now = Math.floor(Date.now() / 1000);
     const data: Array<{ id: string; object: string; created: number; owned_by: string }> = [];
-    for (const provider of deps.providers.list()) {
+    for (const provider of await deps.providers.list()) {
       if (!provider.enabled) continue;
-      for (const m of deps.models.forProvider(provider.id)) {
+      for (const m of await deps.models.forProvider(provider.id)) {
         data.push({ id: `${provider.id}/${m.upstream_id}`, object: 'model', created: now, owned_by: provider.id });
       }
     }
-    for (const alias of deps.aliases.list()) {
+    for (const alias of await deps.aliases.list()) {
       if (!alias.enabled) continue;
       data.push({ id: alias.alias, object: 'model', created: now, owned_by: 'zerorouter:alias' });
     }
@@ -89,14 +89,14 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
     // Limiter reservation (must precede any provider contact)
     const rateWait = deps.limiter.tryConsume(inflightKey);
     if (rateWait !== null) {
-      deps.logs.add(gatewayRecord(started, requestId, key, { model: null, stream: false, body: null }, 429, 'rate_limited', 'Rate limit exceeded.', 0));
+      await deps.logs.add(gatewayRecord(started, requestId, key, { model: null, stream: false, body: null }, 429, 'rate_limited', 'Rate limit exceeded.', 0));
       const err = ApiError.rateLimited(rateWait);
       log.warn('rate limit rejected', { key: inflightKey, retry_after_ms: rateWait });
       throw err;
     }
     const inflightWait = deps.limiter.tryAcquireInflight(inflightKey);
     if (inflightWait !== null) {
-      deps.logs.add(gatewayRecord(started, requestId, key, { model: null, stream: false, body: null }, 429, 'rate_limited', 'Concurrent request cap reached.', 0));
+      await deps.logs.add(gatewayRecord(started, requestId, key, { model: null, stream: false, body: null }, 429, 'rate_limited', 'Concurrent request cap reached.', 0));
       throw ApiError.rateLimited(inflightWait, 'Concurrent request cap reached. Slow down or retry shortly.');
     }
 
@@ -119,7 +119,7 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
       const bodyStore = deps.settings.live.debug_log_request_bodies ? safeJson(parsed) : null;
 
       if (stream) {
-        const resolved = deps.runtime.resolveTarget(parsed.model);
+        const resolved = await deps.runtime.resolveTarget(parsed.model);
         if (resolved instanceof ApiError) throw resolved;
         if (resolved.kind !== 'target') throw ApiError.internal('Unexpected route resolution state.');
         const handle = await deps.runtime.streamOnce(parsed, {
@@ -137,13 +137,13 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
             requestId,
             maxEvents: deps.settings.live.stream_max_events,
           },
-          (stats) => recordStreamCompletion(deps, handle.provider, parsed as UnifiedChatRequest, requestId, started, key, bodyStore, stats),
+          (stats) => void recordStreamCompletion(deps, handle.provider, parsed as UnifiedChatRequest, requestId, started, key, bodyStore, stats),
         );
         log.info('stream started', { id: requestId, provider: handle.provider.id, model: resolved.target.modelId });
         return c.newResponse(body, 200);
       }
 
-      const target = deps.runtime.resolveTarget(parsed.model);
+      const target = await deps.runtime.resolveTarget(parsed.model);
       if (target instanceof ApiError) throw target;
       if (target.kind !== 'target') throw ApiError.internal('Unexpected route resolution state.');
       const outcome = await deps.runtime.chatWithFallbacks(
@@ -163,7 +163,7 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
         model: target.target.modelId,
         ms: Date.now() - started,
       });
-      deps.logs.add(gatewayRecord(started, requestId, key, { model: modelRaw, stream: false, body: bodyStore }, 200, null, null, Date.now() - started, {
+      await deps.logs.add(gatewayRecord(started, requestId, key, { model: modelRaw, stream: false, body: bodyStore }, 200, null, null, Date.now() - started, {
         provider_id: last?.provider.id ?? null,
         provider_name: last?.provider.name ?? null,
         alias: target.target.alias?.alias ?? null,
@@ -173,7 +173,7 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
       return c.json(outcome.shape, 200);
     } catch (err) {
       const apiErr = toApiError(err);
-      deps.logs.add(
+      await deps.logs.add(
         gatewayRecord(started, requestId, key, { model: modelRaw, stream, body: deps.settings.live.debug_log_request_bodies && parsed ? safeJson(parsed) : null }, apiErr.status >= 400 ? apiErr.status : 500, apiErr.code, apiErr.message, Date.now() - started),
       );
       throw err;
@@ -188,7 +188,7 @@ export function createV1Routes(deps: V1Deps): Hono<{ Variables: V1Variables }> {
 /* ─── helpers ─── */
 
 /** Records a stream run's final state (called exactly once from relaySse). */
-function recordStreamCompletion(
+async function recordStreamCompletion(
   deps: V1Deps,
   provider: ProviderRecord,
   req: UnifiedChatRequest,
@@ -197,9 +197,9 @@ function recordStreamCompletion(
   key: AuthenticatedKey,
   bodyStore: string | null,
   stats: RelayStats,
-): void {
+): Promise<void> {
   const status = stats.aborted && !stats.usage ? 499 : 200;
-  deps.logs.add({
+  await deps.logs.add({
     id: requestId,
     ts: started,
     source: 'gateway',

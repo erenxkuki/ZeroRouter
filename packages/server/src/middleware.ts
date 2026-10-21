@@ -147,7 +147,7 @@ export async function adminSessionAuth(deps: AdminAuthDeps, c: Context, next: Ne
   }
 
   const sid = readCookie(c, SESSION_COOKIE);
-  if (sid && deps.sessions.valid(sid)) {
+  if (sid && (await deps.sessions.valid(sid))) {
     c.set('adminAuth', { authenticated: true, mode: 'session', remote });
     await next();
     return;

@@ -1,6 +1,7 @@
-/** Console shell: fixed sidebar, header with session state, content outlet. */
+/** Console shell: fixed sidebar (one-time slide-in), header with session
+ *  state, and a soft page transition on route change. */
 import { type ReactNode } from 'react';
-import { NavLink, useNavigate } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import {
   Activity,
   Boxes,
@@ -41,6 +42,7 @@ export function Layout({
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const logout = async () => {
     try {
       await fetch('/admin/session/logout', { method: 'POST', headers: { 'x-requested-with': 'zerorouter' } });
@@ -62,7 +64,7 @@ export function Layout({
 
   return (
     <div className="flex min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 flex w-[218px] flex-col border-r border-hairline bg-panel">
+      <aside className="zr-side-in fixed inset-y-0 left-0 z-30 flex w-[218px] flex-col border-r border-hairline bg-panel">
         <div className="flex items-center gap-2.5 border-b border-hairline px-4 py-4">
           <div className="grid size-7 place-items-center rounded-md border border-amber/40 bg-amber/10">
             <Activity size={15} className="text-amber" />
@@ -110,10 +112,11 @@ export function Layout({
       </aside>
       <main className="ml-[218px] flex-1">
         <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-hairline bg-canvas/85 px-6 backdrop-blur">
-          <h1 className="font-display text-[15px] font-semibold tracking-tight text-ink">{title}</h1>
+          <h1 key={title} className="zr-title-in font-display text-[15px] font-semibold tracking-tight text-ink">{title}</h1>
           <span className="zr-label">{session?.secure_context ? 'remote host' : 'local host'}</span>
         </header>
-        <div className="p-6">{children}</div>
+        {/* key = pathname → soft entrance on every console route change */}
+        <div key={location.pathname} className="zr-page-in p-6">{children}</div>
       </main>
     </div>
   );

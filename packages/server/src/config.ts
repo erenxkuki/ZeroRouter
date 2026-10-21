@@ -11,6 +11,8 @@ export interface AppConfig {
   host: string;
   port: number;
   dataDir: string;
+  /** Postgres connection string (Supabase). Unset → local SQLite storage. */
+  databaseUrl: string | null;
   /** Master key material for AES-256-GCM credential encryption (32 bytes). */
   masterKey: Buffer;
   /** Env-provided dashboard password (legacy fallback for owner login). */
@@ -122,6 +124,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const dashboardPassword = env['ZEROROUTER_DASHBOARD_PASSWORD'] || null;
   const trustProxy = bool(env['ZEROROUTER_TRUST_PROXY']);
 
+  const databaseUrl = env['ZEROROUTER_DATABASE_URL'] || null;
+  if (databaseUrl && !/^postgres(ql)?:\/\//.test(databaseUrl)) {
+    throw new Error('ZEROROUTER_DATABASE_URL must be a postgres:// or postgresql:// connection string.');
+  }
+
   if (!isLoopbackHost(host) && !allowRemote) {
     throw new Error(
       `Refusing to bind ${host}. ZeroRouter binds loopback only by default. ` +
@@ -151,6 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host,
     port,
     dataDir,
+    databaseUrl,
     masterKey,
     dashboardPassword,
     allowRemote,

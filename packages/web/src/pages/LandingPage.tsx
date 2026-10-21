@@ -7,7 +7,7 @@
  * labeled "demo"; the real registry is only ever rendered inside the
  * authenticated console.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router';
 import {
   ArrowRight,
@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { PublicShell } from '../components/PublicShell';
 import { useReveal } from '../lib/reveal';
+import { getRuntimeOrigin } from '../lib/origin';
 import type { SessionInfo } from '../api';
 
 /* ─── hero status chips ─── */
@@ -66,13 +67,14 @@ function FlowViz() {
           <text x={80} y={y + 4} textAnchor="middle" fontSize={11} fill="#9aa3ad" fontFamily="JetBrains Mono Variable, monospace">
             {providers[i]}
           </text>
-          <line x1={136} y1={y} x2={252} y2={y} stroke="#2a313a" strokeDasharray="3 5" />
+          <line x1={136} y1={y} x2={252} y2={y} stroke="#2a313a" strokeDasharray="3 5" className="zr-land-wire" />
           <circle className={`zr-land-packet pin-${i + 1}`} cx={136} cy={y} r={3.5} fill="#35d0e0" />
         </g>
       ))}
 
       {/* gateway */}
       <circle className="zr-land-ring" cx={300} cy={120} r={54} fill="none" stroke="rgba(245,178,60,0.4)" strokeWidth={1.5} />
+      <circle cx={300} cy={120} r={54} fill="rgba(245,178,60,0.03)" stroke="none" />
       <rect x={252} y={54} width={96} height={132} rx={12} fill="#161a20" stroke="rgba(245,178,60,0.5)" style={{ filter: 'drop-shadow(0 0 14px rgba(245,178,60,0.18))' }} />
       <text x={300} y={126} textAnchor="middle" fontSize={13} fontWeight={620} fill="#e8eaed" fontFamily="Archivo Variable, sans-serif">
         ZeroRouter
@@ -84,7 +86,7 @@ function FlowViz() {
       {/* clients */}
       {[76, 164].map((y, i) => (
         <g key={`c${i}`}>
-          <line x1={348} y1={y} x2={520} y2={y} stroke="#2a313a" strokeDasharray="3 5" />
+          <line x1={348} y1={y} x2={520} y2={y} stroke="#2a313a" strokeDasharray="3 5" className={`zr-land-wire wire-out-${i + 1}`} />
           <rect x={520} y={y - 20} width={112} height={40} rx={9} fill="#111418" stroke="#2a313a" />
           <text x={576} y={y + 4} textAnchor="middle" fontSize={11} fill="#9aa3ad" fontFamily="JetBrains Mono Variable, monospace">
             {i === 0 ? 'your app' : 'your script'}
@@ -99,9 +101,10 @@ function FlowViz() {
   );
 }
 
-/* ─── demo request trace ─── */
+/* ─── demo request trace (origin adapts to the deployment at runtime) ─── */
 
 function TraceCard() {
+  const origin = getRuntimeOrigin();
   return (
     <div className="zr-tracebox w-full max-w-2xl overflow-hidden rounded-[10px] border border-hairline bg-[#0a0c0e] text-left">
       <div className="flex items-center justify-between border-b border-hairline px-3.5 py-2">
@@ -112,14 +115,15 @@ function TraceCard() {
       </div>
       <div className="space-y-1.5 px-3.5 py-3 font-mono text-[11.5px] leading-relaxed">
         <div className="zr-trace text-ink-dim" style={{ ['--td' as string]: '80ms' }}>
-          <span className="text-ink-faint">$ </span>POST /v1/chat/completions
+          <span className="text-ink-faint">$ </span>
+          <span className="break-all">POST {origin}/v1/chat/completions</span>
         </div>
         <div className="zr-trace text-ink-dim" style={{ ['--td' as string]: '620ms' }}>
           <span className="text-cyan">→ </span>model: provider/model
           <span className="text-ink-faint"> — or an alias, e.g. fast-chat</span>
         </div>
         <div className="zr-trace text-ink-dim" style={{ ['--td' as string]: '1160ms' }}>
-          <span className="text-amber">← </span>200 OK · stream · 1.82s · logged locally
+          <span className="text-amber">← </span>200 OK · stream · 1.82s · logged
         </div>
         <div className="zr-trace" style={{ ['--td' as string]: '1700ms' }}>
           <span className="zr-caret text-cyan">▌</span>
@@ -226,7 +230,7 @@ function buildSnippets(origin: string): Snippet[] {
 function CodeTabs() {
   // The deployed base URL is injected at runtime — the same page shows the
   // right origin whether it runs on localhost, a LAN box, or a public deploy.
-  const [origin] = useState(() => (typeof window === 'undefined' ? 'http://localhost:8787' : window.location.origin));
+  const [origin] = useState(getRuntimeOrigin);
   const [tab, setTab] = useState('curl');
   const [copied, setCopied] = useState(false);
   const snippets = buildSnippets(origin);
@@ -345,6 +349,15 @@ function DemoExplorer() {
 
 /* ─── page ─── */
 
+/** Cursor-tracking spotlight: mirrors pointer position into --mx/--my (px),
+ *  consumed by the .zr-land-card::after radial gradient. Pure decoration. */
+function spotlight(e: MouseEvent<HTMLElement>): void {
+  const el = e.currentTarget;
+  const rect = el.getBoundingClientRect();
+  el.style.setProperty('--mx', `${e.clientX - rect.left}px`);
+  el.style.setProperty('--my', `${e.clientY - rect.top}px`);
+}
+
 export function LandingPage({ session, healthOk }: { session: SessionInfo | null; healthOk: boolean | null }) {
   useReveal();
   const authed = session?.authenticated === true;
@@ -358,6 +371,8 @@ export function LandingPage({ session, healthOk }: { session: SessionInfo | null
           <span className="zr-aurora-blob b1" />
           <span className="zr-aurora-blob b2" />
           <span className="zr-aurora-blob b3" />
+          <span className="zr-hero-beam" aria-hidden />
+          <span className="zr-hero-stars" aria-hidden />
         </div>
         <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-6 pb-16 pt-20 text-center md:pt-28">
           <div className="zr-reveal flex flex-wrap items-center justify-center gap-2">
@@ -365,13 +380,19 @@ export function LandingPage({ session, healthOk }: { session: SessionInfo | null
             <Chip tone="amber">Owner-only access</Chip>
             <Chip tone="cyan">OpenAI-compatible</Chip>
           </div>
+          {/* Headline rides a per-line mask reveal (zr-hero-line); the IO / JS
+              reveal system is intentionally not used here so the entrance is
+              pure CSS and never depends on an observer. */}
           <h1
-            className="zr-reveal mt-7 max-w-4xl font-display font-[620] leading-[1.04] tracking-[-0.035em]"
-            style={{ ['--d' as string]: '60ms', fontSize: 'clamp(2.6rem, 6.5vw, 4.6rem)' }}
+            className="mt-7 max-w-4xl font-display font-[620] leading-[1.04] tracking-[-0.035em]"
+            style={{ fontSize: 'clamp(2.6rem, 6.5vw, 4.6rem)' }}
           >
-            Your models. Your gateway.
-            <br />
-            <span className="zr-gradient-text">One API.</span>
+            <span className="zr-hero-line">
+              <span>Your models. Your gateway.</span>
+            </span>
+            <span className="zr-hero-line">
+              <span className="zr-gradient-text" style={{ ['--hd' as string]: '120ms' }}>One API.</span>
+            </span>
           </h1>
           <p
             className="zr-reveal mt-6 max-w-2xl text-[15.5px] leading-relaxed text-ink-dim"
@@ -411,10 +432,16 @@ export function LandingPage({ session, healthOk }: { session: SessionInfo | null
           <h2 className="font-display text-[clamp(1.7rem,3.6vw,2.4rem)] font-[620] leading-[1.1] tracking-[-0.03em]">
             The gateway does the boring parts<span className="text-amber">.</span>
           </h2>
+          <div className="zr-rule" />
         </div>
         <div className="mt-10 grid gap-4 sm:grid-cols-2">
           {FEATURES.map((f, i) => (
-            <article key={f.title} className="zr-reveal zr-land-card p-6 text-left" style={{ ['--d' as string]: `${i * 90}ms` }}>
+            <article
+              key={f.title}
+              className="zr-reveal zr-land-card p-6 text-left"
+              style={{ ['--d' as string]: `${i * 90}ms` }}
+              onMouseMove={spotlight}
+            >
               <div className="mb-4 inline-grid size-9 place-items-center rounded-lg border border-amber/25 bg-amber/10">
                 <f.icon size={17} className="text-amber" />
               </div>
@@ -443,6 +470,7 @@ export function LandingPage({ session, healthOk }: { session: SessionInfo | null
               <br />
               <span className="text-cyan">Call everything</span> after.
             </h2>
+            <div className="zr-rule" />
             <p className="mt-5 text-[14.5px] leading-relaxed text-ink-dim">
               Point any OpenAI-compatible tool at your ZeroRouter and it stops
               caring where the model actually lives. Switch a model behind a
@@ -476,6 +504,7 @@ export function LandingPage({ session, healthOk }: { session: SessionInfo | null
             <h2 className="font-display text-[clamp(1.7rem,3.6vw,2.4rem)] font-[620] leading-[1.1] tracking-[-0.03em]">
               Your registry, <span className="text-amber">searchable</span>.
             </h2>
+            <div className="zr-rule" />
             <p className="mt-5 text-[14.5px] leading-relaxed text-ink-dim">
               Every discovered or manually registered model lands in the explorer
               with what was actually verified against the upstream: streaming, tool

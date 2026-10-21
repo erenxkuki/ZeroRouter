@@ -1,6 +1,6 @@
 import { ApiError } from '../errors.js';
 import { logger } from '../logger.js';
-import type { Db } from '../db/database.js';
+import type { Executor } from '../db/storage.js';
 import { ProviderRepo, ModelRepo, AliasRepo, RoutingRepo } from '../db/repos.js';
 import { getAdapter } from '../adapters/registry.js';
 import { makeTransportHooks } from '../adapters/transport-helpers.js';
@@ -42,7 +42,7 @@ export class ChatRuntime {
   private routing: RoutingRepo;
 
   constructor(
-    private readonly db: Db,
+    private readonly db: Executor,
     private readonly providers: ProviderRepo,
     models: ModelRepo,
     aliases: AliasRepo,
@@ -53,13 +53,14 @@ export class ChatRuntime {
 
   /* ── target resolution ── */
 
-  resolveTarget(modelRaw: string):
+  async resolveTarget(modelRaw: string): Promise<
     | { kind: 'target'; target: { providerId: string; provider: ProviderRecord; modelId: string; alias: AliasRecord | null; fallbacks: { provider_id: string; model: string }[] } }
-    | ApiError {
-    const resolved = this.routing.resolve(modelRaw);
+    | ApiError
+  > {
+    const resolved = await this.routing.resolve(modelRaw);
     if (resolved === null) {
       // produce helpful candidates
-      const hints = this.modelCandidates(modelRaw);
+      const hints = await this.modelCandidates(modelRaw);
       const err = new ApiError(404, 'not_found', `Model "${modelRaw}" is not registered. Available identifiers use "provider/model" form or a configured alias.`, {
         details: { candidates: hints.slice(0, 5) },
       });
@@ -77,7 +78,7 @@ export class ChatRuntime {
     }
     if ('providerId' in resolved) {
       const direct = resolved as ResolvedTarget;
-      const provider = this.providers.get(direct.providerId);
+      const provider = await this.providers.get(direct.providerId);
       if (!provider) {
         return ApiError.notFound(`Provider "${direct.providerId}" does not exist. Use "provider/model" or an alias.`);
       }
@@ -94,7 +95,7 @@ export class ChatRuntime {
       if (!alias.enabled) {
         return ApiError.disabled(`Alias "${alias.alias}" is disabled.`);
       }
-      const provider = this.providers.get(alias.provider_id);
+      const provider = await this.providers.get(alias.provider_id);
       if (!provider) return ApiError.notFound(`Alias target provider "${alias.provider_id}" no longer exists.`);
       return {
         kind: 'target',
@@ -110,10 +111,11 @@ export class ChatRuntime {
     return ApiError.notFound(`Unroutable model "${modelRaw}".`);
   }
 
-  private modelCandidates(query: string): string[] {
-    const rows = this.db
-      .prepare('SELECT provider_id, upstream_id, display_name FROM models WHERE upstream_id LIKE ? OR display_name LIKE ? LIMIT 6')
-      .all(`%${query}%`, `%${query}%`) as Array<{ provider_id: string; upstream_id: string; display_name: string }>;
+  private async modelCandidates(query: string): Promise<string[]> {
+    const rows = (await this.db.query(
+      'SELECT provider_id, upstream_id, display_name FROM models WHERE upstream_id LIKE ? OR display_name LIKE ? LIMIT 6',
+      [`%${query}%`, `%${query}%`],
+    )) as Array<{ provider_id: string; upstream_id: string; display_name: string }>;
     return rows.map((r) => `${r.provider_id}/${r.upstream_id}`);
   }
 
@@ -177,7 +179,7 @@ export class ChatRuntime {
       { provider: target.provider, modelId: target.modelId },
     ];
     for (const fb of target.fallbacks.slice(0, 3)) {
-      const p = this.providers.get(fb.provider_id);
+      const p = await this.providers.get(fb.provider_id);
       if (p && p.enabled) chain.push({ provider: p, modelId: fb.model });
     }
     let lastError: ApiError | null = null;
@@ -202,24 +204,22 @@ export class ChatRuntime {
 
   /* ── streaming ── */
 
-  streamOnce(reqBase: UnifiedChatRequest, attempt: { provider: ProviderRecord; modelId: string }): Promise<ChatStreamHandle> {
+  async streamOnce(reqBase: UnifiedChatRequest, attempt: { provider: ProviderRecord; modelId: string }): Promise<ChatStreamHandle> {
     const provider = attempt.provider;
     if (!provider.enabled) {
-      return Promise.reject(ApiError.disabled(`Provider "${provider.id}" is disabled.`));
+      throw ApiError.disabled(`Provider "${provider.id}" is disabled.`);
     }
     const adapter = getAdapter(provider.adapter);
-    if (!adapter) return Promise.reject(ApiError.internal(`Unknown adapter "${provider.adapter}".`));
+    if (!adapter) throw ApiError.internal(`Unknown adapter "${provider.adapter}".`);
     if (!adapter.capabilities.streaming) {
-      return Promise.reject(
-        ApiError.upstream(
-          400,
-          'unsupported_feature',
-          `Provider "${provider.id}" (adapter ${adapter.id}) does not support streaming. Send stream:false or choose another provider.`,
-        ),
+      throw ApiError.upstream(
+        400,
+        'unsupported_feature',
+        `Provider "${provider.id}" (adapter ${adapter.id}) does not support streaming. Send stream:false or choose another provider.`,
       );
     }
     const { ctx } = this.contextFor(provider);
-    const req = ChatRuntime.overrideRequest(reqBase, this.aliasParamsForStreaming(reqBase));
+    const req = ChatRuntime.overrideRequest(reqBase, await this.aliasParamsForStreaming(reqBase));
     return adapter.chatStream(ctx, req, attempt.modelId).then((outcome) => ({
       ...outcome,
       adapter,
@@ -228,16 +228,16 @@ export class ChatRuntime {
     }));
   }
 
-  private aliasParamsForStreaming(req: UnifiedChatRequest): Record<string, unknown> | null {
-    const direct = this.resolveTarget(req.model);
+  private async aliasParamsForStreaming(req: UnifiedChatRequest): Promise<Record<string, unknown> | null> {
+    const direct = await this.resolveTarget(req.model);
     if (direct && 'kind' in direct && direct.kind === 'target' && direct.target.alias) {
       return direct.target.alias.params ?? null;
     }
     return null;
   }
 
-  resolveAliasFallbacks(req: UnifiedChatRequest): { provider: ProviderRecord; modelId: string; alias: AliasRecord | null; fallbacks: { provider_id: string; model: string }[] } {
-    const t = this.resolveTarget(req.model);
+  async resolveAliasFallbacks(req: UnifiedChatRequest): Promise<{ provider: ProviderRecord; modelId: string; alias: AliasRecord | null; fallbacks: { provider_id: string; model: string }[] }> {
+    const t = await this.resolveTarget(req.model);
     if (t instanceof ApiError) throw t;
     if (!('kind' in t)) throw ApiError.internal('unexpected resolution state');
     return { provider: t.target.provider, modelId: t.target.modelId, alias: t.target.alias, fallbacks: t.target.fallbacks };

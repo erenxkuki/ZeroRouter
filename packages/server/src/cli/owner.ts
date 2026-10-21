@@ -31,7 +31,7 @@ import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import path from 'node:path';
 
-import { Db } from '../db/database.js';
+import { createStorage } from '../db/storage.js';
 import { OwnerCredentialRepo, SessionRepo, LoginThrottleRepo } from '../db/repos.js';
 import { OwnerAuthService, USERNAME_RE, PASSWORD_MIN_LEN } from '../services/ownerAuth.js';
 
@@ -105,7 +105,7 @@ async function cmdStatus(ownerAuth: OwnerAuthService): Promise<void> {
   );
   console.log(
     ownerAuth.username
-      ? 'credential stored:    scrypt hash in gateway.db (owner_credential)'
+      ? 'credential stored:    scrypt hash in the active storage (owner_credential)'
       : 'credential stored:    —',
   );
 }
@@ -183,13 +183,18 @@ async function main(): Promise<number> {
   const dataDir = path.resolve(flagValue(argv, '--data-dir') ?? process.env['ZEROROUTER_DATA_DIR'] ?? './data');
   const forceRecovery = hasFlag(argv, '--recovery');
 
-  const db = new Db(path.join(dataDir, 'gateway.db'));
+  // Same selection rule as the server: ZEROROUTER_DATABASE_URL → Postgres,
+  // otherwise the local SQLite file under the data directory. Migrations run
+  // in both cases before any command touches the owner tables.
+  const db = await createStorage({
+    databaseUrl: process.env['ZEROROUTER_DATABASE_URL'] || null,
+    dataDir,
+  });
   try {
-    db.migrate();
     const ownerRepo = new OwnerCredentialRepo(db);
     const sessions = new SessionRepo(db);
     const throttleRepo = new LoginThrottleRepo(db);
-    const ownerAuth = new OwnerAuthService({
+    const ownerAuth = await OwnerAuthService.create({
       db,
       ownerRepo,
       sessions,
@@ -211,12 +216,12 @@ async function main(): Promise<number> {
         return 0;
       }
       case 'unlock': {
-        throttleRepo.clearAll();
+        await throttleRepo.clearAll();
         console.log('login throttles cleared (lockout was temporary; cooldowns never lasted beyond 5 minutes).');
         return 0;
       }
       case 'revoke-sessions': {
-        const removed = sessions.deleteAll();
+        const removed = await sessions.deleteAll();
         console.log(`revoked ${removed} dashboard session(s).`);
         return 0;
       }
@@ -225,7 +230,7 @@ async function main(): Promise<number> {
         return 2;
     }
   } finally {
-    db.close();
+    await db.close();
   }
 }
 

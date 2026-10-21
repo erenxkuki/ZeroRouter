@@ -24,9 +24,11 @@ Three mutually exclusive auth modes (resolved at startup, visible in
   **loopback clients only**. This is the "local personal console" posture.
 - `environment` — `ZEROROUTER_DASHBOARD_PASSWORD` is set: password-only
   login (legacy fallback shape).
-- `database` — the owner credential lives in `gateway.db`
-  (`owner_credential`, scrypt `v1$` hash; created by the owner CLI only):
-  login is **username + password**.
+- `database` — the owner credential lives in the gateway database — SQLite
+  (`gateway.db`) by default, or the configured Postgres instance when
+  `ZEROROUTER_DATABASE_URL` is set (e.g. Supabase)
+  (`owner_credential` table, scrypt `v1$` hash; created by the owner CLI
+  only): login is **username + password**.
 
 Login (`POST /admin/session/login`, CSRF header required):
 
@@ -47,7 +49,7 @@ Login (`POST /admin/session/login`, CSRF header required):
 - Deep links to console pages cannot leak data: the SPA gate renders the
   login screen without even projecting authed data (no prerendered cards).
 
-Login abuse protection (SQLite-backed, survives restarts):
+Login abuse protection (database-backed — survives restarts):
 
 - max 12 attempts/min per client address (hashed with SHA-256 — no raw IPs
   at rest), each attempt counted before verification;
@@ -72,6 +74,11 @@ npm -w packages/server run owner -- rotate-password --recovery   # locked-out ow
 npm -w packages/server run owner -- unlock             # clears login throttles
 npm -w packages/server run owner -- revoke-sessions    # invalidates all sessions
 ```
+
+The CLI operates on the same storage the server uses: set
+`ZEROROUTER_DATABASE_URL` in the shell to provision on Postgres (this is
+also how the credential is created for a Vercel deployment — there is no
+HTTP path to provisioning, see docs/vercel-deploy.md).
 
 - Creating or rotating the credential always revokes every dashboard
   session and clears login throttles (rotation = session invalidation).
@@ -100,9 +107,11 @@ npm -w packages/server run owner -- revoke-sessions    # invalidates all session
 
 - Credentials (`api_key`, custom headers) are encrypted with AES-256-GCM
   using a 32-byte master key.
-- The master key lives in `data/.master_key` (mode 0600 on POSIX; on Windows
-  the profile directory ACL applies) or `ZEROROUTER_MASTER_KEY` — never in
-  the database, so DB access alone does not yield plaintexts.
+- The master key comes from (in order): `ZEROROUTER_MASTER_KEY` — a platform
+  secret on hosted platforms like Vercel — or `data/.master_key`
+  (mode 0600 on POSIX; on Windows the profile directory ACL applies). It is
+  **never** stored in the database, so DB access alone does not yield
+  plaintexts.
 - Decrypted credentials exist only in memory for the duration of an upstream
   call. They are never sent to the browser: the admin API exposes only
   `has_credentials: true/false`.
@@ -193,3 +202,22 @@ page; only per-component state exists for the one-time key reveal.
   so an attacker cannot permanently lock the owner out.
 - Model status transitions (`verified`/`error`) exist in the schema but are
   not yet driven automatically by chat outcomes.
+
+## 10. Cloud deployment (Vercel)
+
+The serverless mode (docs/vercel-deploy.md) keeps every invariant above and
+changes only the runtime shape:
+
+- `ZEROROUTER_DATABASE_URL` + `ZEROROUTER_MASTER_KEY` are **required**
+  (the function refuses to boot without them — an ephemeral filesystem can
+  hold neither SQLite state nor a generated master key).
+- `ZEROROUTER_ALLOW_REMOTE=true` + `ZEROROUTER_TRUST_PROXY=true` are the
+  documented posture: Vercel is the only TLS front and the only source of
+  `x-forwarded-*` values.
+- The rate limiter stays in-memory and therefore applies per warm function
+  instance, not globally; login throttles, sessions and key checks are all
+  database-backed and unaffected.
+- Streaming responses pass through unchanged; the platform caps request
+  duration (60 s on Hobby).
+- Maintenance (log retention, session pruning) runs once per cold start
+  instead of on an interval.

@@ -117,7 +117,7 @@ export function OverviewPage() {
           <EmptyState>No provider events recorded yet.</EmptyState>
         ) : (
           <div className="overflow-x-auto">
-            <table className="zr-table">
+            <table className="zr-table zr-rowsIn">
               <thead>
                 <tr>
                   <th>time</th>

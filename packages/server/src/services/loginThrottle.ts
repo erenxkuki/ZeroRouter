@@ -9,9 +9,9 @@
  *    never result in a permanent lockout; a successful login clears all state
  *    for that client, and the owner CLI `unlock` command clears everything.
  *
- * Counters are stored in SQLite (`login_throttle`, keyed by a hash of the
- * client address — no raw IPs at rest) so they survive restarts, matching the
- * DB-backed design used for sessions.
+ * Counters are stored in the database (`login_throttle`, keyed by a hash of
+ * the client address — no raw IPs at rest) so they survive restarts, matching
+ * the DB-backed design used for sessions.
  */
 import { createHash } from 'node:crypto';
 
@@ -37,7 +37,7 @@ export const LOGIN_THROTTLE_DEFAULTS: LoginThrottleConfig = {
   maxCooldownMs: 5 * 60_000,
 };
 
-/** Stable sqlite key for a client address: sha256 hex (no raw IPs at rest). */
+/** Stable storage key for a client address: sha256 hex (no raw IPs at rest). */
 export function loginKeyHash(clientAddress: string | null): string {
   return createHash('sha256').update(clientAddress ?? 'unknown-address').digest('hex');
 }
@@ -49,8 +49,8 @@ export class LoginThrottleService {
   ) {}
 
   /** `null` when the caller may attempt a login, otherwise a retry delay (ms). */
-  precheck(keyHash: string, now = Date.now()): number | null {
-    const row = this.repo.get(keyHash);
+  async precheck(keyHash: string, now = Date.now()): Promise<number | null> {
+    const row = await this.repo.get(keyHash);
     if (!row) return null;
     if (row.cooldownUntil > now) return row.cooldownUntil - now;
     if (now - row.attemptWindowStart >= this.cfg.attemptWindowMs) return null;
@@ -61,10 +61,10 @@ export class LoginThrottleService {
   }
 
   /** Counts one attempt consumed (call after a passing precheck). */
-  consume(keyHash: string, now = Date.now()): void {
-    const row = this.repo.get(keyHash);
+  async consume(keyHash: string, now = Date.now()): Promise<void> {
+    const row = await this.repo.get(keyHash);
     if (!row || now - row.attemptWindowStart >= this.cfg.attemptWindowMs) {
-      this.repo.upsert({
+      await this.repo.upsert({
         keyHash,
         attemptWindowStart: now,
         attemptCount: 1,
@@ -74,11 +74,11 @@ export class LoginThrottleService {
       });
       return;
     }
-    this.repo.upsert({ ...row, attemptCount: row.attemptCount + 1, cooldownUntil: 0 });
+    await this.repo.upsert({ ...row, attemptCount: row.attemptCount + 1, cooldownUntil: 0 });
   }
 
-  recordFailure(keyHash: string, now = Date.now()): void {
-    const row = this.repo.get(keyHash);
+  async recordFailure(keyHash: string, now = Date.now()): Promise<void> {
+    const row = await this.repo.get(keyHash);
     const base = row ?? {
       keyHash,
       attemptWindowStart: now,
@@ -94,7 +94,7 @@ export class LoginThrottleService {
     if (failureCount >= 3) {
       cooldownMs = Math.min(this.cfg.maxCooldownMs, this.cfg.baseCooldownMs * 2 ** (failureCount - 3));
     }
-    this.repo.upsert({
+    await this.repo.upsert({
       ...base,
       failureWindowStart,
       failureCount,
@@ -103,15 +103,15 @@ export class LoginThrottleService {
   }
 
   /** A successful login clears all throttle state for the client. */
-  recordSuccess(keyHash: string): void {
-    this.repo.clear(keyHash);
+  async recordSuccess(keyHash: string): Promise<void> {
+    await this.repo.clear(keyHash);
   }
 
-  clearAll(): void {
-    this.repo.clearAll();
+  async clearAll(): Promise<void> {
+    await this.repo.clearAll();
   }
 
-  prune(now = Date.now(), maxAgeMs = 24 * 3600_000): void {
-    this.repo.prune(now, maxAgeMs);
+  async prune(now = Date.now(), maxAgeMs = 24 * 3600_000): Promise<void> {
+    await this.repo.prune(now, maxAgeMs);
   }
 }

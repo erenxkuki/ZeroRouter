@@ -306,6 +306,300 @@
   }
 }
 
+/* ═════════════════════════════ hero: spotlight + starfield ═══════════════════
+ * Two slow GPU-composited layers over the aurora: a rotating conic beam that
+ * breathes across the headline, and a drifting micro-starfield. Both are pure
+ * decoration and fully disabled under prefers-reduced-motion. */
+
+@keyframes zr-beam-spin {
+  to { transform: rotate(1turn); }
+}
+.zr-hero-beam {
+  position: absolute;
+  left: 50%;
+  top: -36rem;
+  width: 92rem;
+  height: 92rem;
+  margin-left: -46rem; /* centered without transform (rotation applied below) */
+  pointer-events: none;
+  background: conic-gradient(
+    from 8deg,
+    transparent 0deg,
+    rgba(245, 178, 60, 0.055) 16deg,
+    transparent 46deg,
+    transparent 178deg,
+    rgba(53, 208, 224, 0.05) 202deg,
+    transparent 238deg,
+    transparent 360deg
+  );
+  -webkit-mask-image: radial-gradient(ellipse 60% 52% at 50% 46%, black 18%, transparent 70%);
+  mask-image: radial-gradient(ellipse 60% 52% at 50% 46%, black 18%, transparent 70%);
+  will-change: transform;
+}
+@keyframes zr-stars-drift {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: -218px 452px, 176px 306px; }
+}
+.zr-hero-stars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    radial-gradient(1.3px 1.3px at 24% 12%, rgba(232, 234, 237, 0.5) 49%, transparent 51%),
+    radial-gradient(1px 1px at 68% 58%, rgba(232, 234, 237, 0.32) 49%, transparent 51%);
+  background-size: 168px 144px, 256px 208px;
+  -webkit-mask-image: radial-gradient(ellipse 78% 62% at 50% 30%, black 22%, transparent 76%);
+  mask-image: radial-gradient(ellipse 78% 62% at 50% 30%, black 22%, transparent 76%);
+}
+
+/* ── headline line reveal: each line slides out of its own overflow mask ── */
+@keyframes zr-hero-up {
+  from {
+    transform: translateY(108%);
+    filter: blur(7px);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    filter: none;
+    opacity: 1;
+  }
+}
+.zr-hero-line {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.08em; /* keep descenders inside the mask */
+}
+.zr-hero-line > span {
+  display: block;
+}
+
+/* ── wires with a moving "current" (SVG dash march) ── */
+@keyframes zr-wire-flow {
+  to { stroke-dashoffset: -16; } /* 2 periods of the 3/5 dash → seamless */
+}
+
+/* ── scanline sweep across the request-trace box ── */
+.zr-tracebox {
+  position: relative;
+}
+.zr-tracebox::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(53, 208, 224, 0.1) 44%,
+    rgba(53, 208, 224, 0.22) 50%,
+    rgba(53, 208, 224, 0.1) 56%,
+    transparent 100%
+  );
+  background-size: 100% 240%;
+  background-repeat: no-repeat;
+  background-position: 0 -120%;
+  opacity: 0;
+}
+@keyframes zr-scan {
+  0%   { background-position: 0 -120%; opacity: 0; }
+  12%  { opacity: 1; }
+  58%  { background-position: 0 130%; opacity: 0.4; }
+  68%, 100% { background-position: 0 130%; opacity: 0; }
+}
+
+/* ── cursor spotlight on feature cards (set by JS: --mx/--my in px) ── */
+.zr-land-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    260px circle at var(--mx, 50%) var(--my, -20%),
+    rgba(245, 178, 60, 0.08),
+    transparent 68%
+  );
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+.zr-land-card:hover::after {
+  opacity: 1;
+}
+
+/* ── section rule: draws itself when its reveal block enters ── */
+@keyframes zr-rule-in {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.zr-rule {
+  height: 1px;
+  width: min(220px, 46%);
+  margin-top: 10px;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, rgba(245, 178, 60, 0.55), rgba(53, 208, 224, 0.4) 60%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .zr-hero-beam { animation: zr-beam-spin 52s linear infinite; }
+  .zr-hero-stars { animation: zr-stars-drift 96s linear infinite; }
+  .zr-hero-line > span {
+    transform: translateY(108%);
+    animation: zr-hero-up 880ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+    animation-delay: var(--hd, 0ms);
+  }
+  .zr-land-wire {
+    animation: zr-wire-flow 1.15s linear infinite;
+  }
+  .zr-land-wire.wire-2 { animation-delay: 0.42s; }
+  .zr-land-wire.wire-3 { animation-delay: 0.78s; }
+  .zr-land-wire.wire-out-1 { animation-duration: 1.4s; animation-delay: 0.2s; }
+  .zr-land-wire.wire-out-2 { animation-duration: 1.4s; animation-delay: 0.62s; }
+  .zr-tracebox::after { animation: zr-scan 6.4s ease-in-out infinite; }
+  .zr-reveal.zr-in .zr-rule {
+    animation: zr-rule-in 900ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+    animation-delay: 130ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zr-hero-beam,
+  .zr-hero-stars {
+    display: none;
+  }
+  .zr-hero-line > span {
+    transform: none;
+    animation: none;
+    filter: none;
+    opacity: 1;
+  }
+  .zr-land-wire { animation: none; }
+  .zr-tracebox::after { animation: none; opacity: 0; }
+  .zr-land-card::after { display: none; }
+  .zr-rule { transform: none; }
+}
+
+/* ═════════════════════════════ console motion ═════════════════════════════
+ * Tasteful by intent: a soft page transition on route change, a one-time
+ * sidebar slide on app load, hover lift on stat cards, modal pop-in, and a
+ * bar-grow on the activity sparkline. Gradual table-row entrance stays
+ * bounded. All gated behind motion preference. */
+
+@keyframes zr-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes zr-side-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes zr-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes zr-modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes zr-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes zr-bar-grow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .zr-page-in { animation: zr-page-in 320ms cubic-bezier(0.22, 0.9, 0.28, 1) both; }
+  .zr-side-in { animation: zr-side-in 380ms cubic-bezier(0.22, 0.9, 0.28, 1) both; }
+  .zr-modal-overlay { animation: zr-modal-fade 180ms ease both; }
+  .zr-modal-card { animation: zr-modal-pop 240ms cubic-bezier(0.22, 0.9, 0.28, 1) both; }
+  .zr-title-in { animation: zr-title-in 240ms ease both; }
+  .zr-sparkbar {
+    transform-origin: bottom;
+    transform-box: fill-box;
+    animation: zr-bar-grow 520ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+    animation-delay: calc(var(--bi, 0) * 12ms);
+  }
+}
+/* stat cards: gentle lift + accent ring on hover */
+.zr-stat {
+  position: relative;
+  transition:
+    transform 200ms cubic-bezier(0.22, 0.9, 0.28, 1),
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+.zr-stat:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-hairline-strong);
+  box-shadow:
+    0 14px 34px -20px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(53, 208, 224, 0.07);
+  will-change: transform;
+}
+/* console tables: rows fade in on first paint (stagger capped) */
+@media (prefers-reduced-motion: no-preference) {
+  .zr-rowsIn tbody tr {
+    animation: zr-page-in 300ms ease both;
+  }
+  .zr-rowsIn tbody tr:nth-child(1) { animation-delay: 20ms; }
+  .zr-rowsIn tbody tr:nth-child(2) { animation-delay: 40ms; }
+  .zr-rowsIn tbody tr:nth-child(3) { animation-delay: 60ms; }
+  .zr-rowsIn tbody tr:nth-child(4) { animation-delay: 80ms; }
+  .zr-rowsIn tbody tr:nth-child(5) { animation-delay: 100ms; }
+  .zr-rowsIn tbody tr:nth-child(6) { animation-delay: 115ms; }
+  .zr-rowsIn tbody tr:nth-child(7) { animation-delay: 130ms; }
+  .zr-rowsIn tbody tr:nth-child(8) { animation-delay: 145ms; }
+  .zr-rowsIn tbody tr:nth-child(9) { animation-delay: 160ms; }
+  .zr-rowsIn tbody tr:nth-child(10) { animation-delay: 175ms; }
+  .zr-rowsIn tbody tr:nth-child(n + 11) { animation-delay: 190ms; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zr-page-in,
+  .zr-side-in,
+  .zr-modal-overlay,
+  .zr-modal-card,
+  .zr-title-in,
+  .zr-sparkbar,
+  .zr-rowsIn tbody tr {
+    animation: none;
+  }
+  .zr-stat {
+    transition: none;
+  }
+  .zr-stat:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}
+
 /* ═════════════════════════ public pages (landing / terms / privacy) ═════════
  * Motion system for the public face: aurora hero field, capability marquee,
  * scroll reveals, hover glows, packet flow. Every transition respects
