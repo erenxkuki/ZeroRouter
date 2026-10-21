@@ -51,7 +51,7 @@ Variables** (Production + Preview):
 
 | Variable | Required | Value |
 | --- | --- | --- |
-| `ZEROROUTER_DATABASE_URL` | ✅ | The **Transaction pooler** URL, port **6543**: `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`. Prepared statements are already disabled (`prepare: false`), which port 6543 requires. |
+| `ZEROROUTER_DATABASE_URL` | ✅ | The **Session pooler** URL, port **5432**: `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres`. Use the Session pooler for Vercel production (it works reliably across all platforms); the Transaction pooler (6543) hangs on Vercel network but works only in dedicated serverless-only deployments. |
 | `ZEROROUTER_MASTER_KEY` | ✅ | 32 raw bytes, base64 (44 chars): `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. Store it first in a password manager — **never regenerate it after provider credentials exist** (they would become undecryptable; fail-closed). |
 | `ZEROROUTER_ALLOW_REMOTE` | ✅ | `true`. Also makes dashboard cookies `Secure` unconditionally. |
 | `NODE_ENV` | ✅ | `production`. |
