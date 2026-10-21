@@ -1,0 +1,27 @@
+# ZeroRouter — never commit secrets or machine-local state
+# Owner data: scrypt-hashed credentials, sessions, logs + the AES master key.
+# Losing .master_key makes all encrypted provider credentials unrecoverable —
+# but it must never travel with the source either.
+packages/server/data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+.master_key
+.env
+.env.*
+!.env.example
+
+# build output + dependencies
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# editors / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

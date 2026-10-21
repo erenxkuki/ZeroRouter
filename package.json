@@ -1,0 +1,29 @@
+{
+  "name": "zerorouter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal AI API gateway: connect providers, discover models, route requests through one normalized OpenAI-compatible endpoint.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/server",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c magenta,cyan \"npm -w packages/server run dev\" \"npm -w packages/web run dev\"",
+    "dev:server": "npm -w packages/server run dev",
+    "dev:web": "npm -w packages/web run dev",
+    "build": "npm -w packages/web run build && npm -w packages/server run build",
+    "start": "npm -w packages/server run start",
+    "test": "npm -w packages/server run test && npm -w packages/web run test",
+    "typecheck": "npm -w packages/server run typecheck && npm -w packages/web run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
