@@ -2,6 +2,7 @@
   "name": "zerorouter",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Personal AI API gateway: connect providers, discover models, route requests through one normalized OpenAI-compatible endpoint.",
   "license": "MIT",
   "workspaces": [
