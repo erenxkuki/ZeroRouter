@@ -129,6 +129,17 @@ node -e "import('./packages/server/dist/serverless.js').then(async m => {
 - **Cookie rejected / login loops** — `ZEROROUTER_ALLOW_REMOTE=true` must be
   set (it turns `Secure` on); the console must be opened over HTTPS (Vercel
   default).
-- **Provider credentials fail after re-deploy** — `ZEROROUTER_MASTER_KEY`
+</rfl:parameter> - **Provider credentials fail after re-deploy** — `ZEROROUTER_MASTER_KEY`
+  changed after secrets were stored. Restore the original value; credentials
+  are never re-encrypted automatically (fail-closed by design).
+- **`ERR_REQUIRE_ESM` on cold start** — Vercel compiles `api/index.ts` to
+  CommonJS, so a static `import` of the ES-module server build becomes an
+  illegal `require()`. The loader must use native `import()` (already done in
+  `api/index.ts`) and the root `package.json` must declare `"type": "module"`.
+- **`/healthz` returning 504 / \"Connecting to gateway…\"** — the runtime
+  must boot before the platform timeout. `/healthz` now answers with
+  `{ ok, booting: true }` while the DB connect is in flight; if it stays
+  `booting: true` past ~30 s, the function's network path to Supabase is
+  stalled (check Supabase network restrictions and the function region).","oldString">- **Provider credentials fail after re-deploy** — `ZEROROUTER_MASTER_KEY`
   changed after secrets were stored. Restore the original value; credentials
   are never re-encrypted automatically (fail-closed by design).
